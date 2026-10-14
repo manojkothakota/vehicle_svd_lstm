@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Platoon Simulation - All-in-One</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  html, body { margin: 0; font-family: Arial, sans-serif; }
+  #mapWrap { position: relative; height: 78vh; }
+  #map { height: 100%; width: 100%; }
+  #panel {
+    position: absolute; top: 10px; left: 10px; z-index: 1000;
+    background: white; padding: 12px 14px; border-radius: 8px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.3); width: 320px; max-height: 92%;
+    overflow-y: auto;
+  }
+  #panel h3 { margin: 0 0 8px 0; font-size: 15px; }
+  #adminBox {
+    position: absolute; top: 10px; right: 10px; z-index: 1000;
+    background: white; padding: 12px 14px; border-radius: 8px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.3); width: 250px;
+  }
+  #adminBox h3 { margin: 0 0 8px 0; font-size: 15px; }
+  #adminMessage { width: 100%; box-sizing: border-box; padding: 7px; resize: vertical; min-height: 62px; }
+  #networkStatus { font-size: 11px; color: #555; margin-top: 7px; }
+  #panel h4 { margin: 10px 0 4px 0; font-size: 13px; }
+  #search { width: 100%; padding: 6px; box-sizing: border-box; }
+  #suggestions {
+    background: white; max-height: 150px; overflow-y: auto; border-radius: 6px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.3); display: none;
+  }
+  #suggestions div { padding: 6px 8px; cursor: pointer; font-size: 13px; border-bottom: 1px solid #eee; }
+  #suggestions div:hover { background: #f0f0f0; }
+  .row { display: flex; gap: 6px; margin: 4px 0; flex-wrap: wrap; }
+  .field { flex: 1; min-width: 80px; font-size: 12px; }
+  .field input { width: 100%; box-sizing: border-box; padding: 4px; }
+  button {
+    padding: 6px 10px; border: none; border-radius: 5px; cursor: pointer;
+    background: #1a73e8; color: white; font-size: 13px;
+  }
+  button.secondary { background: #db4437; }
+  button.gray { background: #5f6368; }
+  button.green { background: #0f9d58; }
+  button:disabled { background: #ccc; cursor: not-allowed; }
+  #status { font-size: 12px; color: #333; margin-top: 6px; white-space: pre-line; }
+  #playControls { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+  input[type=range] { flex: 1; }
+  #legend { max-height: 180px; overflow-y: auto; font-size: 12px; margin-top: 6px; }
+  .legend-row { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; border: 1px solid #333; flex-shrink: 0; }
+  #chartsSection { padding: 20px; }
+  #chartsSection canvas { margin-bottom: 30px; max-height: 320px; }
+</style>
+</head>
+<body>
+
+<div id="mapWrap">
+  <div id="panel">
+    <h3>Platoon Route &amp; Simulation</h3>
+
+    <input id="search" type="text" placeholder="Search a place">
+    <div id="suggestions"></div>
+
+    <div class="row">
+      <button id="drawBtn">Start Drawing</button>
+      <button id="undoBtn" class="gray">Undo</button>
+      <button id="clearBtn" class="secondary">Clear</button>
+    </div>
+    <div class="row" style="font-size:12px; align-items:center;">
+      <label><input type="checkbox" id="closeLoopChk"> Return to start point (loop)</label>
+    </div>
+    <div style="font-size:11px; color:#555; margin-bottom:4px;">
+      Click your start point, then middle points, then your end point, in order.
+    </div>
+
+    <h4>Simulation settings</h4>
+    <div class="row">
+      <div class="field">Cars<input id="nCars" type="number" value="10" min="2" max="20"></div>
+      <div class="field">Speed (m/s)<input id="speed" type="number" value="12" min="1"></div>
+      <div class="field">Duration (s)<input id="duration" type="number" value="180" min="10"></div>
+    </div>
+    <div class="row">
+      <div class="field">Car spacing (m)<input id="spacing" type="number" value="20" min="5"></div>
+      <div class="field">Path resolution (m)<input id="pathRes" type="number" value="5" min="1"></div>
+    </div>
+
+    <div class="row">
+      <button id="runBtn" class="green" style="flex:1;">Generate Route &amp; Run Simulation</button>
+    </div>
+    <div id="status"></div>
+
+    <div id="playControls" style="display:none;">
+      <button id="playBtn">Pause</button>
+      <select id="speedSel">
+        <option value="1">1x</option>
+        <option value="2" selected>2x</option>
+        <option value="5">5x</option>
+        <option value="10">10x</option>
+      </select>
+    </div>
+    <input type="range" id="timeSlider" min="0" max="0" value="0" step="1" style="width:100%; display:none;">
+    <div id="timeLabel" style="font-size:12px;"></div>
+    <div id="legend"></div>
+
+    <div class="row" id="exportRow" style="display:none;">
+      <button id="exportBtn" style="flex:1;">Download Excel</button>
+    </div>
+  </div>
+
+  <div id="map"></div>
+
+  <!-- Admin message interface -->
+  <div id="adminBox">
+    <h3>Admin Box</h3>
+    <textarea id="adminMessage" placeholder="Example: Increase speed to 15 m/s or change direction..."></textarea>
+    <div class="row">
+      <button id="sendAdminBtn" class="green" style="flex:1;">Send to All Vehicles</button>
+    </div>
+    <div id="networkStatus">Run the simulation to establish the vehicle network.</div>
+  </div>
+</div>
+
+<div id="chartsSection" style="display:none;">
+  <h2>Comparison Graphs - All Cars</h2>
+  <canvas id="speedChart"></canvas>
+  <canvas id="accelChart"></canvas>
+  <canvas id="distChart"></canvas>
+  <canvas id="gapChart"></canvas>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script>
+const COLORS = ["#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd",
+                 "#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf",
+                 "#aec7e8","#ffbb78","#98df8a","#ff9896","#c5b0d5"];
+
+// ---------------- Map + drawing (same free stack as before) ----------------
+let map, drawPolyline;
+let pathPoints = [], markers = [];
+let drawingEnabled = false;
+
+function initMap() {
+  map = L.map('map').setView([16.4300, 80.5500], 13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  drawPolyline = L.polyline([], { color: '#E6007E', weight: 4 }).addTo(map);
+
+  map.on('click', (e) => {
+    if (!drawingEnabled) return;
+    pathPoints.push({ lat: e.latlng.lat, lng: e.latlng.lng });
+    const m = L.circleMarker([e.latlng.lat, e.latlng.lng], { radius: 5, color: '#E6007E', fillColor: '#E6007E', fillOpacity: 1 }).addTo(map);
+    markers.push(m);
+    drawPolyline.setLatLngs(pathPoints.map(p => [p.lat, p.lng]));
+  });
+
+  document.getElementById('drawBtn').addEventListener('click', () => {
+    drawingEnabled = !drawingEnabled;
+    document.getElementById('drawBtn').textContent = drawingEnabled ? 'Stop Drawing' : 'Start Drawing';
+  });
+  document.getElementById('undoBtn').addEventListener('click', () => {
+    pathPoints.pop();
+    const m = markers.pop();
+    if (m) map.removeLayer(m);
+    drawPolyline.setLatLngs(pathPoints.map(p => [p.lat, p.lng]));
+  });
+  document.getElementById('clearBtn').addEventListener('click', resetAll);
+  document.getElementById('runBtn').addEventListener('click', runPipeline);
+  document.getElementById('playBtn').addEventListener('click', togglePlay);
+  document.getElementById('timeSlider').addEventListener('input', (e) => {
+    frameIdx = parseInt(e.target.value);
+    renderFrame(frameIdx);
+  });
+  document.getElementById('exportBtn').addEventListener('click', exportExcel);
+  document.getElementById('sendAdminBtn').addEventListener('click', sendAdminMessage);
+
+  setupSearch();
+}
+
+function resetDrawing() {
+  pathPoints = [];
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+  drawPolyline.setLatLngs([]);
+}
+
+function resetSimulation() {
+  clearInterval(playTimer);
+  Object.values(carMarkers).forEach(m => map.removeLayer(m));
+  carMarkers = {};
+  networkLinks.forEach(link => map.removeLayer(link));
+  networkLinks = [];
+  activeMessageTimers = {};
+  lastAdminMessage = null;
+  const ns = document.getElementById('networkStatus');
+  if (ns) ns.textContent = 'Run the simulation to establish the vehicle network.';
+  if (roadLine) { map.removeLayer(roadLine); roadLine = null; }
+  frames = [];
+  document.getElementById('playControls').style.display = 'none';
+  document.getElementById('timeSlider').style.display = 'none';
+  document.getElementById('legend').innerHTML = '';
+  document.getElementById('timeLabel').textContent = '';
+  document.getElementById('exportRow').style.display = 'none';
+  document.getElementById('chartsSection').style.display = 'none';
+  setStatus('');
+}
+
+function resetAll() {
+  resetDrawing();
+  resetSimulation();
+}
+
+function setupSearch() {
+  const input = document.getElementById('search');
+  const suggBox = document.getElementById('suggestions');
+  let debounceTimer;
+  input.addEventListener('input', () => {
+    clearTimeout(debounceTimer);
+    const q = input.value.trim();
+    if (q.length < 3) { suggBox.style.display = 'none'; return; }
+    debounceTimer = setTimeout(() => searchPlace(q), 400);
+  });
+  async function searchPlace(query) {
+    try {
+      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`;
+      const res = await fetch(url, { headers: { 'Accept-Language': 'en' } });
+      const results = await res.json();
+      suggBox.innerHTML = '';
+      if (results.length === 0) { suggBox.style.display = 'none'; return; }
+      results.forEach(r => {
+        const div = document.createElement('div');
+        div.textContent = r.display_name;
+        div.addEventListener('click', () => {
+          map.setView([parseFloat(r.lat), parseFloat(r.lon)], 15);
+          suggBox.style.display = 'none';
+          input.value = r.display_name;
+        });
+        suggBox.appendChild(div);
+      });
+      suggBox.style.display = 'block';
+    } catch (err) { console.error('Search failed:', err); }
+  }
+}
+
+function setStatus(msg) { document.getElementById('status').textContent = msg; }
+
+// ---------------- Coordinate projection (local flat-earth, meters) ----------------
+function makeProjector(lat0, lon0) {
+  const lat0Rad = lat0 * Math.PI / 180;
+  const mPerDegLat = 111320;
+  const mPerDegLon = 111320 * Math.cos(lat0Rad);
+  return {
+    toXY(lat, lon) { return { x: (lon - lon0) * mPerDegLon, y: (lat - lat0) * mPerDegLat }; },
+    toLatLon(x, y) { return { lat: lat0 + y / mPerDegLat, lon: lon0 + x / mPerDegLon }; }
+  };
+}
+
+// ---------------- Snap to roads (free OSRM public server) ----------------
+async function snapToRoads(points, closeLoop) {
+  const seq = closeLoop ? points.concat([points[0]]) : points;
+  const coordStr = seq.map(p => `${p.lng},${p.lat}`).join(';');
+  const url = `https://router.project-osrm.org/route/v1/driving/${coordStr}?geometries=geojson&overview=full`;
+  const res = await fetch(url);
+  const data = await res.json();
+  if (data.code !== 'Ok') throw new Error('OSRM error: ' + data.code);
+  const route = data.routes[0];
+  return {
+    coords: route.geometry.coordinates.map(([lng, lat]) => ({ lat, lng })),
+    distance_m: route.distance,   // real road distance, from OSRM
+    duration_s: route.duration    // OSRM's free-flow drive time estimate
+  };
+}
+
+// ---------------- Path resampling ----------------
+function resamplePath(xyPoints, spacing) {
+  let cum = [0];
+  for (let i = 1; i < xyPoints.length; i++) {
+    const d = Math.hypot(xyPoints[i].x - xyPoints[i - 1].x, xyPoints[i].y - xyPoints[i - 1].y);
+    cum.push(cum[i - 1] + d);
+  }
+  const total = cum[cum.length - 1];
+  const n = Math.max(Math.floor(total / spacing), 2);
+  const result = [];
+  let segIdx = 0;
+  for (let k = 0; k <= n; k++) {
+    const targetDist = (k / n) * total;
+    while (segIdx < cum.length - 2 && cum[segIdx + 1] < targetDist) segIdx++;
+    const d0 = cum[segIdx], d1 = cum[segIdx + 1];
+    const t = d1 > d0 ? (targetDist - d0) / (d1 - d0) : 0;
+    const p0 = xyPoints[segIdx], p1 = xyPoints[segIdx + 1];
+    result.push({ x: p0.x + t * (p1.x - p0.x), y: p0.y + t * (p1.y - p0.y) });
+  }
+  return { points: result, total };
+}
+
+// ---------------- Open (point-to-point) path lookup ----------------
+class OpenPath {
+  constructor(pts) {
+    this.x = pts.map(p => p.x);
+    this.y = pts.map(p => p.y);
+    this.n = this.x.length;
+    this.cumDist = [0];
+    for (let i = 1; i < this.n; i++) {
+      this.cumDist.push(this.cumDist[i - 1] + Math.hypot(this.x[i] - this.x[i - 1], this.y[i] - this.y[i - 1]));
+    }
+    this.length = this.cumDist[this.n - 1];
+    this.segHeading = [];
+    for (let i = 0; i < this.n - 1; i++) {
+      this.segHeading.push(Math.atan2(this.y[i + 1] - this.y[i], this.x[i + 1] - this.x[i]));
+    }
+  }
+  positionAt(s) {
+    s = Math.max(0, Math.min(this.length, s));
+    if (this.n < 2) return { x: this.x[0] || 0, y: this.y[0] || 0, heading: 0 };
+    let lo = 0, hi = this.n - 2;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (this.cumDist[mid] <= s) lo = mid; else hi = mid - 1;
+    }
+    const idx = lo, idxNext = idx + 1;
+    const segStart = this.cumDist[idx];
+    const segLen = this.cumDist[idxNext] - segStart;
+    const frac = segLen <= 1e-9 ? 0 : (s - segStart) / segLen;
+    return {
+      x: this.x[idx] + frac * (this.x[idxNext] - this.x[idx]),
+      y: this.y[idx] + frac * (this.y[idxNext] - this.y[idx]),
+      heading: this.segHeading[idx]
+    };
+  }
+}
+
+// ---------------- Closed path lookup ----------------
+class ClosedPath {
+  constructor(pts) {
+    this.x = pts.map(p => p.x);
+    this.y = pts.map(p => p.y);
+    this.n = this.x.length;
+    const segLen = [];
+    for (let i = 0; i < this.n; i++) {
+      const j = (i + 1) % this.n;
+      segLen.push(Math.hypot(this.x[j] - this.x[i], this.y[j] - this.y[i]));
+    }
+    this.cumDist = [0];
+    for (let i = 0; i < this.n; i++) this.cumDist.push(this.cumDist[i] + segLen[i]);
+    this.length = this.cumDist[this.n];
+    this.cumDist = this.cumDist.slice(0, this.n);
+    this.segHeading = [];
+    for (let i = 0; i < this.n; i++) {
+      const j = (i + 1) % this.n;
+      this.segHeading.push(Math.atan2(this.y[j] - this.y[i], this.x[j] - this.x[i]));
+    }
+  }
+  positionAt(s) {
+    s = ((s % this.length) + this.length) % this.length;
+    let lo = 0, hi = this.n - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (this.cumDist[mid] <= s) lo = mid; else hi = mid - 1;
+    }
+    const idx = lo;
+    const idxNext = (idx + 1) % this.n;
+    const segStart = this.cumDist[idx];
+    const segLen = (idxNext === 0) ? (this.length - segStart) : (this.cumDist[idxNext] - segStart);
+    const frac = segLen <= 1e-9 ? 0 : (s - segStart) / segLen;
+    return {
+      x: this.x[idx] + frac * (this.x[idxNext] - this.x[idx]),
+      y: this.y[idx] + frac * (this.y[idxNext] - this.y[idx]),
+      heading: this.segHeading[idx]
+    };
+  }
+}
+
+// ---------------- Vehicle = linked-list node ----------------
+class Vehicle {
+  constructor(id, s0, isLeader) {
+    this.id = id; this.isLeader = isLeader; this.s = s0; this.v = 0; this.a = 0;
+    this.distanceTraveled = 0; this.x = 0; this.y = 0; this.heading = 0;
+    this.prev = null; this.next = null;
+  }
+  broadcast() { return { id: this.id, s: this.s, v: this.v }; } // <-- V2V message point
+}
+
+// ---------------- Platoon = linked list + car-following control ----------------
+class Platoon {
+  constructor(path, nVehicles, spacingM, targetSpeed, closed) {
+    this.path = path; this.n = nVehicles; this.targetSpeed = targetSpeed; this.time = 0;
+    this.closed = !!closed;
+    this.kP = 0.35; this.kV = 0.9; this.standstillGap = 6.0; this.timeGap = 1.0;
+    this.aMax = 2.0; this.aMin = -3.0; this.leaderAccel = 1.0;
+    this.vehicles = [];
+    for (let i = 0; i < nVehicles; i++) {
+      let s0;
+      if (this.closed) {
+        s0 = ((-i * spacingM) % path.length + path.length) % path.length;
+      } else {
+        // everyone starts at the actual route beginning; the car-following
+        // control naturally opens up realistic gaps once the leader moves off
+        s0 = 0;
+      }
+      this.vehicles.push(new Vehicle(i, s0, i === 0));
+    }
+    for (let i = 1; i < nVehicles; i++) { this.vehicles[i].prev = this.vehicles[i - 1]; this.vehicles[i - 1].next = this.vehicles[i]; }
+    this.updateXY();
+  }
+  updateXY() { for (const v of this.vehicles) { const p = this.path.positionAt(v.s); v.x = p.x; v.y = p.y; v.heading = p.heading; } }
+  allSettled() {
+    if (this.closed) return false;
+    const leader = this.vehicles[0];
+    if (leader.s < this.path.length - 1e-6) return false;
+    return this.vehicles.every(v => v.v < 0.05);
+  }
+  step(dt) {
+    const leader = this.vehicles[0];
+    const leaderArrived = !this.closed && leader.s >= this.path.length - 1e-9;
+    if (leaderArrived) {
+      leader.v = 0; leader.a = 0;
+    } else {
+      leader.a = leader.v < this.targetSpeed ? this.leaderAccel : 0.0;
+      leader.v = Math.min(this.targetSpeed, Math.max(0, leader.v + leader.a * dt));
+    }
+    if (this.closed) {
+      leader.s = ((leader.s + leader.v * dt) % this.path.length + this.path.length) % this.path.length;
+    } else {
+      leader.s = Math.min(this.path.length, leader.s + leader.v * dt);
+      if (leader.s >= this.path.length) leader.v = 0;
+    }
+    leader.distanceTraveled += leader.v * dt;
+
+    for (let i = 1; i < this.vehicles.length; i++) {
+      const v = this.vehicles[i];
+      const arrived = !this.closed && v.s >= this.path.length - 1e-9;
+      if (arrived) {
+        v.v = 0; v.a = 0;
+      } else {
+        const msg = v.prev.broadcast();
+        const gap = this.closed
+          ? (((msg.s - v.s) % this.path.length) + this.path.length) % this.path.length
+          : (msg.s - v.s);
+        const desiredGap = this.standstillGap + this.timeGap * v.v;
+        const spacingError = gap - desiredGap;
+        const speedError = msg.v - v.v;
+        let a = this.kP * spacingError + this.kV * speedError;
+        a = Math.max(this.aMin, Math.min(this.aMax, a));
+        v.a = a;
+        v.v = Math.max(0, Math.min(this.targetSpeed * 1.3, v.v + a * dt));
+        if (this.closed) {
+          v.s = ((v.s + v.v * dt) % this.path.length + this.path.length) % this.path.length;
+        } else {
+          v.s = Math.min(this.path.length, v.s + v.v * dt);
+          if (v.s >= this.path.length) v.v = 0;
+        }
+      }
+      v.distanceTraveled += v.v * dt;
+    }
+    this.updateXY();
+    this.time += dt;
+  }
+}
+
+function simulate(platoon, durationS, dt, logEvery) {
+  const out = [];
+  const nSteps = Math.round(durationS / dt);
+  let nextLog = 0;
+  let arrivedAtStep = null;
+  const bufferSteps = Math.round(3 / dt); // keep logging 3s after everyone arrives, then stop
+
+  for (let step = 0; step <= nSteps; step++) {
+    const t = step * dt;
+    if (t + 1e-9 >= nextLog) {
+      const cars = platoon.vehicles.map(v => {
+        let gap = null;
+        if (!v.isLeader) {
+          gap = platoon.closed
+            ? (((v.prev.s - v.s) % platoon.path.length) + platoon.path.length) % platoon.path.length
+            : (v.prev.s - v.s);
+        }
+        return { id: v.id, role: v.isLeader ? 'Leader' : 'Follower', x: v.x, y: v.y, heading: v.heading,
+                 distance: v.distanceTraveled, speed: v.v, accel: v.a, gap };
+      });
+      out.push({ time: Math.round(nextLog * 100) / 100, cars });
+      nextLog += logEvery;
+    }
+    if (step < nSteps) platoon.step(dt);
+
+    if (platoon.allSettled()) {
+      if (arrivedAtStep === null) arrivedAtStep = step;
+      else if (step - arrivedAtStep > bufferSteps) break;
+    }
+  }
+  return out;
+}
+
+// ---------------- Main pipeline: one click does everything ----------------
+let frames = [], carMarkers = {}, roadLine = null;
+let frameIdx = 0, playing = true, playTimer = null, pipelineClosed = false;
+
+// Full-mesh V2V network: every vehicle is connected to every other vehicle.
+let networkLinks = [];
+let activeMessageTimers = {};
+let lastAdminMessage = null;
+
+async function runPipeline() {
+  if (pathPoints.length < 2) { alert('Draw at least 2 points on the map first (start, middle points, end).'); return; }
+  document.getElementById('runBtn').disabled = true;
+  resetSimulation();
+
+  try {
+    const closed = document.getElementById('closeLoopChk').checked;
+
+    setStatus('Snapping path to real roads...');
+    const routeInfo = await snapToRoads(pathPoints, closed);
+    const snapped = routeInfo.coords;
+
+    setStatus('Building local coordinate system...');
+    const lat0 = snapped[0].lat, lon0 = snapped[0].lng;
+    const proj = makeProjector(lat0, lon0);
+    const rawXY = snapped.map(p => proj.toXY(p.lat, p.lng));
+
+    let spacing = parseFloat(document.getElementById('pathRes').value) || 5.0;
+    let cumTotal = 0;
+    for (let i = 1; i < rawXY.length; i++) cumTotal += Math.hypot(rawXY[i].x - rawXY[i-1].x, rawXY[i].y - rawXY[i-1].y);
+    if (cumTotal / spacing > 50000) spacing = cumTotal / 50000; // cap point count for performance
+
+    setStatus(`Resampling path (spacing ${spacing.toFixed(1)} m)...`);
+    const { points } = resamplePath(rawXY, spacing);
+    const path = closed ? new ClosedPath(points) : new OpenPath(points);
+
+    const nCars = parseInt(document.getElementById('nCars').value) || 10;
+    const speed = parseFloat(document.getElementById('speed').value) || 12;
+    const carSpacing = parseFloat(document.getElementById('spacing').value) || 20;
+
+    // make sure the max sim duration is long enough for the whole trip to finish
+    let duration = parseFloat(document.getElementById('duration').value) || 180;
+    if (!closed) {
+      const recommended = Math.ceil((path.length / speed) * 1.4 + 60 + (nCars * carSpacing) / speed);
+      duration = Math.max(duration, recommended);
+    }
+
+    setStatus(`Real road route distance (OSRM): ${(routeInfo.distance_m/1000).toFixed(2)} km. Running platoon simulation...`);
+
+    const platoon = new Platoon(path, nCars, carSpacing, speed, closed);
+    frames = simulate(platoon, duration, 0.1, 1.0);
+    pipelineClosed = closed;
+
+    // draw the real road path
+    roadLine = L.polyline(snapped.map(p => [p.lat, p.lng]), { color: '#E6007E', weight: 4, opacity: 0.8 }).addTo(map);
+    map.fitBounds(roadLine.getBounds());
+
+    // build car markers + legend
+    const legend = document.getElementById('legend');
+    legend.innerHTML = '';
+    frames[0].cars.forEach(c => {
+      const ll = proj.toLatLon(c.x, c.y);
+      const color = COLORS[c.id % COLORS.length];
+      const marker = L.circleMarker([ll.lat, ll.lon], { radius: 7, color: '#000', weight: 1, fillColor: color, fillOpacity: 1 }).addTo(map);
+      marker.bindTooltip(c.role === 'Leader' ? 'Leader' : `Car ${c.id}`);
+      carMarkers[c.id] = marker;
+      const row = document.createElement('div');
+      row.className = 'legend-row';
+      row.innerHTML = `<span class="dot" style="background:${color}"></span><span id="lg-${c.id}">${c.role==='Leader'?'Leader':'Car '+c.id}: 0.0 m/s</span>`;
+      legend.appendChild(row);
+    });
+
+    buildFullMeshNetwork();
+    document.getElementById('networkStatus').textContent =
+      `Network active: ${nCars} vehicles, ${networkLinks.length} V2V links (full mesh).`;
+
+    window.__proj = proj; // used by renderFrame
+
+    const slider = document.getElementById('timeSlider');
+    slider.max = frames.length - 1;
+    slider.style.display = 'block';
+    document.getElementById('playControls').style.display = 'flex';
+    document.getElementById('exportRow').style.display = 'flex';
+
+    frameIdx = 0;
+    renderFrame(0);
+    playing = true;
+    document.getElementById('playBtn').textContent = 'Pause';
+    startPlayback();
+
+    drawCharts();
+    document.getElementById('chartsSection').style.display = 'block';
+
+    setStatus(buildSummary(routeInfo));
+
+  } catch (err) {
+    console.error(err);
+    setStatus('Error: ' + err.message + ' (check your internet connection - OSRM/Nominatim need it)');
+  } finally {
+    document.getElementById('runBtn').disabled = false;
+  }
+}
+
+function buildSummary(routeInfo) {
+  const last = frames[frames.length - 1];
+  const lines = [];
+  lines.push(`Real road route distance (OSRM): ${(routeInfo.distance_m/1000).toFixed(2)} km`);
+  lines.push(`OSRM estimated drive time (single car): ${(routeInfo.duration_s/60).toFixed(1)} min`);
+  lines.push(`Simulation ${pipelineClosed ? 'ran for' : 'completed at'} t = ${last.time.toFixed(0)} s`);
+  lines.push('');
+  last.cars.forEach(c => {
+    const label = c.role === 'Leader' ? 'Leader' : `Car ${c.id}`;
+    lines.push(`${label}: traveled ${(c.distance/1000).toFixed(3)} km, final speed ${c.speed.toFixed(1)} m/s`);
+  });
+  return lines.join('\n');
+}
+
+function renderFrame(idx) {
+  const frame = frames[idx];
+  const proj = window.__proj;
+  frame.cars.forEach(c => {
+    const ll = proj.toLatLon(c.x, c.y);
+    const marker = carMarkers[c.id];
+    if (marker) marker.setLatLng([ll.lat, ll.lon]);
+    const lg = document.getElementById(`lg-${c.id}`);
+    if (lg) lg.textContent = `${c.role==='Leader'?'Leader':'Car '+c.id}: ${c.speed.toFixed(1)} m/s`;
+  });
+  document.getElementById('timeLabel').textContent = `t = ${frame.time.toFixed(0)} s`;
+  document.getElementById('timeSlider').value = idx;
+  updateNetworkLinks();
+}
+
+
+// ---------------- Admin messaging + full-mesh vehicle network ----------------
+function buildFullMeshNetwork() {
+  networkLinks.forEach(link => map.removeLayer(link));
+  networkLinks = [];
+
+  const ids = Object.keys(carMarkers).map(Number);
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      const a = carMarkers[ids[i]].getLatLng();
+      const b = carMarkers[ids[j]].getLatLng();
+      const link = L.polyline([a, b], {
+        color: '#5f6368',
+        weight: 1.2,
+        opacity: 0.45,
+        dashArray: '4,4',
+        interactive: false
+      }).addTo(map);
+      link._vehiclePair = [ids[i], ids[j]];
+      networkLinks.push(link);
+    }
+  }
+}
+
+function updateNetworkLinks() {
+  networkLinks.forEach(link => {
+    const [aId, bId] = link._vehiclePair;
+    const a = carMarkers[aId];
+    const b = carMarkers[bId];
+    if (a && b) link.setLatLngs([a.getLatLng(), b.getLatLng()]);
+  });
+}
+
+function sendAdminMessage() {
+  const input = document.getElementById('adminMessage');
+  const message = input.value.trim();
+
+  if (!message) {
+    alert('Please enter a message first.');
+    return;
+  }
+  if (Object.keys(carMarkers).length === 0) {
+    alert('Run the simulation first so the vehicles can receive the message.');
+    return;
+  }
+
+  // Admin -> Leader + every remaining vehicle.
+  // For this contribution, the message is visual/communication-layer only;
+  // it does not yet alter the precomputed vehicle dynamics.
+  lastAdminMessage = {
+    text: message,
+    sentAt: new Date().toLocaleTimeString()
+  };
+
+  Object.keys(carMarkers).forEach(id => showVehicleMessage(Number(id), message));
+  document.getElementById('networkStatus').textContent =
+    `Message broadcast at ${lastAdminMessage.sentAt}: delivered to ${Object.keys(carMarkers).length} vehicles.`;
+
+  input.value = '';
+}
+
+function showVehicleMessage(id, message) {
+  const marker = carMarkers[id];
+  if (!marker) return;
+
+  if (activeMessageTimers[id]) clearTimeout(activeMessageTimers[id]);
+
+  const label = id === 0 ? 'Leader' : `Car ${id}`;
+  const html = `<div style="font-size:12px; min-width:170px;">
+    <b>✓ ${label} received message</b><br>
+    <span>${escapeHtml(message)}</span>
+  </div>`;
+
+  marker.bindPopup(html, {
+    autoClose: false,
+    closeOnClick: false,
+    closeButton: false,
+    offset: [0, -8]
+  }).openPopup();
+
+  activeMessageTimers[id] = setTimeout(() => {
+    if (marker) marker.closePopup();
+  }, 5000);
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function togglePlay() {
+  playing = !playing;
+  document.getElementById('playBtn').textContent = playing ? 'Pause' : 'Play';
+  if (playing) startPlayback(); else clearInterval(playTimer);
+}
+
+function startPlayback() {
+  clearInterval(playTimer);
+  playTimer = setInterval(() => {
+    const mult = parseInt(document.getElementById('speedSel').value);
+    frameIdx += mult;
+    if (frameIdx >= frames.length) {
+      if (pipelineClosed) {
+        frameIdx = 0;
+      } else {
+        frameIdx = frames.length - 1;
+        clearInterval(playTimer);
+        playing = false;
+        document.getElementById('playBtn').textContent = 'Play';
+      }
+    }
+    renderFrame(frameIdx);
+  }, 150);
+}
+
+// ---------------- Excel export ----------------
+function exportExcel() {
+  const flatRows = [];
+  frames.forEach(f => f.cars.forEach(c => {
+    flatRows.push({
+      time_s: f.time, car_id: c.id, role: c.role,
+      x_m: +c.x.toFixed(3), y_m: +c.y.toFixed(3),
+      distance_traveled_m: +c.distance.toFixed(3),
+      speed_mps: +c.speed.toFixed(4),
+      acceleration_mps2: +c.accel.toFixed(4),
+      gap_to_predecessor_m: c.gap === null ? '' : +c.gap.toFixed(3)
+    });
+  }));
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(flatRows), 'Simulation_Log');
+
+  function pivot(field) {
+    return frames.map(f => {
+      const row = { time_s: f.time };
+      f.cars.forEach(c => row['Car_' + c.id] = field === 'gap' ? (c.gap === null ? '' : c.gap) : c[field]);
+      return row;
+    });
+  }
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pivot('speed')), 'Speed_by_Car');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pivot('accel')), 'Acceleration_by_Car');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pivot('distance')), 'Distance_by_Car');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pivot('gap')), 'Gap_by_Car');
+
+  XLSX.writeFile(wb, 'platoon_simulation.xlsx');
+}
+
+// ---------------- Charts ----------------
+let chartObjs = [];
+function drawCharts() {
+  chartObjs.forEach(c => c.destroy());
+  chartObjs = [];
+  const carIds = frames[0].cars.map(c => c.id);
+  const labels = frames.map(f => f.time);
+
+  function buildDatasets(field) {
+    return carIds.map(id => ({
+      label: id === 0 ? 'Car 0 (Leader)' : `Car ${id}`,
+      data: frames.map(f => { const c = f.cars.find(x => x.id === id); return field === 'gap' ? c.gap : c[field]; }),
+      borderColor: COLORS[id % COLORS.length],
+      backgroundColor: COLORS[id % COLORS.length],
+      fill: false, pointRadius: 0, borderWidth: 1.5
+    }));
+  }
+
+  function makeChart(canvasId, field, title, yLabel) {
+    const ctx = document.getElementById(canvasId).getContext('2d');
+    chartObjs.push(new Chart(ctx, {
+      type: 'line',
+      data: { labels, datasets: buildDatasets(field) },
+      options: {
+        responsive: true,
+        plugins: { title: { display: true, text: title } },
+        scales: { x: { title: { display: true, text: 'Time (s)' } }, y: { title: { display: true, text: yLabel } } }
+      }
+    }));
+  }
+
+  makeChart('speedChart', 'speed', 'Speed Comparison - All Cars', 'Speed (m/s)');
+  makeChart('accelChart', 'accel', 'Acceleration Comparison - All Cars', 'Acceleration (m/s^2)');
+  makeChart('distChart', 'distance', 'Distance Traveled Comparison - All Cars', 'Cumulative Distance (m)');
+  makeChart('gapChart', 'gap', 'Inter-Vehicle Spacing Over Time', 'Gap to predecessor (m)');
+}
+
+initMap();
+</script>
+
+</body>
+</html>

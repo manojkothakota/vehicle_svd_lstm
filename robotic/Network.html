@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>SDV Network Monitor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{--bg:#0f141b;--card:#18202b;--tx:#e6edf3;--mu:#8b98a8;--bd:#2a3545;--can:#4aa3ff;--v2v:#f0883e;--cl:#3fb950;--svc:#bc8cff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:13px system-ui,sans-serif;padding:12px}
+h1{font-size:17px;margin:0 0 8px}h2{font-size:12px;color:var(--mu);text-transform:uppercase;letter-spacing:.05em;margin:0 0 6px}
+.grid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:10px}@media(max-width:1000px){.grid{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:10px;margin-bottom:10px}
+table{width:100%;border-collapse:collapse;font-size:11.5px}th,td{padding:3px 5px;border-bottom:1px solid var(--bd);text-align:left}th{color:var(--mu);font-weight:600}
+td.n{text-align:right;font-variant-numeric:tabular-nums}
+input,select,button{background:#0c1117;color:var(--tx);border:1px solid var(--bd);border-radius:6px;padding:4px 6px;font:inherit}
+button{background:#2f6feb;border-color:#2f6feb;cursor:pointer}button.r{background:#c23b3b;border-color:#c23b3b}button.g{background:#444;border-color:#555}
+.flow{stroke-dasharray:7 5;animation:dash 1s linear infinite}@keyframes dash{to{stroke-dashoffset:-24}}
+.box{fill:#1d2733;stroke:#3a4a5f;stroke-width:1.5}.lbl{fill:#e6edf3;font-size:12px;font-weight:600}.sub{fill:#8b98a8;font-size:10px}.rate{font-size:10.5px;font-weight:600}
+.ok{color:#3fb950}.bad{color:#f85149}.warn{color:#f0883e}.tag{padding:1px 6px;border-radius:8px;font-size:10.5px;color:#000}
+.row{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:4px 0}
+#log{max-height:300px;overflow:auto}
+</style></head><body>
+<h1>SDV Network Monitor <span id="hdr" style="font-size:12px;color:var(--mu)"></span></h1>
+<div class="grid"><div>
+ <div class="card"><h2>Topology and live traffic (msgs/s)</h2>
+ <svg id="topo" viewBox="0 0 1000 540" width="100%">
+  <rect x="300" y="15" width="430" height="510" rx="14" fill="none" stroke="#3a4a5f" stroke-dasharray="5 4"/>
+  <text x="315" y="36" class="sub">VEHICLE (each car = own processes)  -  in-vehicle bus = simulated CAN over MQTT</text>
+  <rect class="box" x="40" y="60" width="190" height="80" rx="10"/><text class="lbl" x="135" y="95" text-anchor="middle">OEM Cloud</text><text class="sub" x="135" y="113" text-anchor="middle">cloud.py - OTA, telemetry, STL</text>
+  <rect class="box" x="40" y="360" width="190" height="80" rx="10"/><text class="lbl" x="135" y="395" text-anchor="middle">AI service (LSTM)</text><text class="sub" x="135" y="413" text-anchor="middle">MessageAuthenticity</text>
+  <rect class="box" x="350" y="60" width="200" height="80" rx="10"/><text class="lbl" x="450" y="92" text-anchor="middle">Gateway ECU</text><text class="sub" x="450" y="110" text-anchor="middle">firewall - HMAC - replay check</text><text class="sub" x="450" y="124" text-anchor="middle">the only external interface</text>
+  <rect class="box" x="350" y="230" width="200" height="80" rx="10"/><text class="lbl" x="450" y="262" text-anchor="middle">HPC (Adaptive)</text><text class="sub" x="450" y="280" text-anchor="middle">ADAS - detector - shield</text><text class="sub" x="450" y="294" text-anchor="middle">asks AI for REAL/FAKE</text>
+  <rect class="box" x="350" y="420" width="150" height="70" rx="10"/><text class="lbl" x="425" y="450" text-anchor="middle">Powertrain MCU</text><text class="sub" x="425" y="466" text-anchor="middle">Classic - E2E - WdgM</text>
+  <rect class="box" x="560" y="420" width="150" height="70" rx="10"/><text class="lbl" x="635" y="450" text-anchor="middle">Sensor MCU</text><text class="sub" x="635" y="466" text-anchor="middle">GNSS / position</text>
+  <rect class="box" x="790" y="60" width="190" height="130" rx="10"/><text class="lbl" x="885" y="95" text-anchor="middle">Other cars</text><text class="sub" x="885" y="113" text-anchor="middle">their gateways verify</text><text class="sub" x="885" y="127" text-anchor="middle">signature + membership</text>
+  <g id="edges"></g>
+ </svg>
+ <div class="row" style="font-size:11px"><span class="tag" style="background:var(--can)">CAN bus</span><span class="tag" style="background:var(--v2v)">V2V wireless</span><span class="tag" style="background:var(--cl)">V2Cloud</span><span class="tag" style="background:var(--svc)">Adaptive service</span><span style="color:var(--mu)">line thickness and animation speed = traffic rate</span></div>
+ </div>
+ <div class="card"><h2>Traffic by layer / link</h2><table id="rows"></table></div>
+</div><div>
+ <div class="card"><h2>Controls</h2>
+  <div class="row">Show car: <select id="car" onchange="poll()"><option value="all">all</option></select><button class="g" onclick="post('/api/net_reset',{})">Reset counters</button></div>
+  <div class="row"><b>Message</b> from <select id="mf"><option value="ADMIN">Admin</option></select> to <select id="mt"><option value="ALL">All</option></select></div>
+  <div class="row"><input id="mx" value="stop" style="flex:1"><button onclick="sendMsg()">Send</button></div>
+  <div class="row"><b>Attack</b> victim <select id="av"></select><select id="am"><option>teleport</option><option>brake</option><option>badota</option></select>
+   <label><input id="as" type="checkbox"> stolen key</label><button class="r" onclick="attack()">Launch</button></div>
+ </div>
+ <div class="card"><h2>Firewall and protection counters</h2><table id="fw"></table></div>
+ <div class="card"><h2>Packet log (notable frames + sampled streams)</h2><div id="log"></div></div>
+</div></div>
+<script>
+const COL={"In-vehicle bus (CAN)":"#4aa3ff","V2V wireless":"#f0883e","V2Cloud uplink":"#3fb950","V2Cloud downlink":"#3fb950","Adaptive services (SOME/IP-like)":"#bc8cff"};
+// id, x1,y1,x2,y2, label pos, predicate(row)
+const E=[
+ ["plant",425,420,560+0,455,"Powertrain -> Sensor", r=>r.sig=="plant", 495,432],
+ ["sensor",620,420,520,310,"sensor", r=>r.sig=="sensor",600,360],
+ ["cmd",410,420,410,310,"cmd (E2E)", r=>r.sig=="cmd"&&r.layer.startsWith("In-"),360,370],
+ ["up",430,230,430,140,"status/alert/verdict", r=>["hpc_status","alert","msglog"].includes(r.sig)&&r.layer.startsWith("In-"),345,190],
+ ["dn",475,140,475,230,"v2v_in / ota / cmd", r=>["v2v_in","v2v_cmd","ota"].includes(r.sig),480,190],
+ ["v2v",550,100,790,100,"V2V (signed BSM + cmds)", r=>r.layer=="V2V wireless",570,92],
+ ["cup",350,85,230,85,"uplink", r=>r.layer=="V2Cloud uplink",262,76],
+ ["cdn",230,115,350,115,"downlink (signed)", r=>r.layer=="V2Cloud downlink",245,132],
+ ["svc",350,270,230,390,"AI RPC", r=>r.layer.startsWith("Adaptive"),255,320]];
+const g=document.getElementById("edges");
+E.forEach(e=>{const col=e[0]=="v2v"?COL["V2V wireless"]:e[0].startsWith("c")&&e[0]!="cmd"?COL["V2Cloud uplink"]:e[0]=="svc"?COL["Adaptive services (SOME/IP-like)"]:COL["In-vehicle bus (CAN)"];
+ g.insertAdjacentHTML("beforeend",`<line id="l_${e[0]}" x1="${e[1]}" y1="${e[2]}" x2="${e[3]}" y2="${e[4]}" stroke="${col}" stroke-width="1" opacity=".35"/><text id="t_${e[0]}" x="${e[8]}" y="${e[9]}" class="rate" fill="${col}"></text>`)});
+const post=(u,b)=>fetch(u,{method:"POST",body:JSON.stringify(b)});
+function sendMsg(){post("/api/message",{from:mf.value,to:mt.value,text:mx.value})}
+function attack(){post("/api/attack",{victim:+av.value,mode:am.value,signed:as.checked,duration:10})}
+let inited=false;
+async function poll(){
+ try{
+  const c=document.getElementById("car").value;
+  const [n,s]=await Promise.all([fetch("/api/net?car="+c).then(r=>r.json()),fetch("/api/state").then(r=>r.json())]);
+  if(!inited&&s.cars.length){inited=true;s.cars.forEach(k=>{[car,mf,mt].forEach((el,i)=>el.add(new Option((i?"Car ":"Car ")+k.id,k.id)));if(k.id>0)av.add(new Option("car "+k.id,k.id))})}
+  hdr.textContent=`- AI ${s.ai_mode} - secure V2V ${s.secure?"ON":"OFF"} - ${s.cars.length} vehicles`;
+  E.forEach(e=>{const rate=n.rows.filter(e[6]).reduce((a,r)=>a+r.rate,0),l=document.getElementById("l_"+e[0]);
+   l.setAttribute("stroke-width",rate>0?1.5+Math.min(5,Math.log2(1+rate)):1);l.setAttribute("opacity",rate>0?1:.3);
+   l.classList.toggle("flow",rate>0);l.style.animationDuration=(2.5/(1+rate/4)).toFixed(2)+"s";
+   document.getElementById("t_"+e[0]).textContent=rate>0?`${e[5]}: ${rate.toFixed(0)}/s`:""});
+  rows.innerHTML="<tr><th>Layer</th><th>Link</th><th>Signal</th><th>msg/s</th><th>total</th><th>KB</th><th>Protection</th></tr>"+n.rows.map(r=>`<tr><td style="color:${COL[r.layer]||"#aaa"}">${r.layer}</td><td>${r.link}</td><td>${r.sig}</td><td class="n">${r.rate.toFixed(1)}</td><td class="n">${r.count}</td><td class="n">${(r.bytes/1024).toFixed(1)}</td><td style="color:var(--mu)">${r.security}</td></tr>`).join("");
+  fw.innerHTML="<tr><th>Car</th><th>Mode</th><th>Gateway drops</th><th>HPC rejects</th><th>E2E errs</th><th>Ver</th></tr>"+s.cars.map(k=>`<tr><td>car${k.id}</td><td>${k.mode}</td><td class="n ${k.drops?"bad":""}">${k.drops}</td><td class="n ${k.rejected?"warn":""}">${k.rejected}</td><td class="n ${k.e2e_err?"bad":""}">${k.e2e_err}</td><td>${k.version}</td></tr>`).join("");
+  log.innerHTML="<table><tr><th>time</th><th>layer</th><th>topic</th><th>bytes</th><th>protection</th><th>content</th></tr>"+n.log.map(e=>`<tr><td>${new Date(e.t*1000).toLocaleTimeString()}</td><td style="color:${COL[e.layer]||"#aaa"}">${e.layer.split(" ")[0]} ${e.layer.split(" ")[1]||""}</td><td>${e.topic}</td><td class="n">${e.bytes}</td><td class="${e.protection=="unsigned"?"bad":"ok"}">${e.protection}</td><td>${e.summary}</td></tr>`).join("")+"</table>";
+ }catch(e){hdr.textContent="- backend not reachable (run python run_all.py)"}
+}
+setInterval(poll,500);poll();
+</script></body></html>

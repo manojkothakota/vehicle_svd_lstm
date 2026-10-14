@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>SDV Platoon - Cloud Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{--bg:#10151c;--card:#19212c;--tx:#e6edf3;--mu:#8b98a8;--bd:#2a3545}
+*{box-sizing:border-box}body{margin:0;font:14px system-ui,sans-serif;background:var(--bg);color:var(--tx);padding:14px}
+h1{font-size:18px;margin:0 0 10px}h2{font-size:13px;color:var(--mu);margin:0 0 8px;text-transform:uppercase;letter-spacing:.05em}
+.grid{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:12px}@media(max-width:900px){.grid{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:12px;margin-bottom:12px}
+canvas{width:100%;background:#0c1117;border-radius:8px}
+table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:4px 6px;text-align:right;border-bottom:1px solid var(--bd)}th:first-child,td:first-child{text-align:left}
+input,select,button{background:#0c1117;color:var(--tx);border:1px solid var(--bd);border-radius:6px;padding:5px 7px;margin:2px 0;font:inherit}
+button{cursor:pointer;background:#2f6feb;border-color:#2f6feb}button.red{background:#c23b3b;border-color:#c23b3b}
+label{display:block;color:var(--mu);font-size:12px;margin-top:4px}#alerts{max-height:220px;overflow:auto;font-size:12px}
+.al{padding:3px 0;border-bottom:1px solid var(--bd)}.pill{padding:1px 6px;border-radius:9px;font-size:11px;color:#000}
+</style></head><body>
+<h1>Software-Defined Vehicle Platoon <span id="hdr" style="color:var(--mu);font-size:13px"></span></h1>
+<div class="grid"><div>
+  <div class="card"><h2>Live map (from vehicle sensor MCUs)</h2><canvas id="cv" width="820" height="460"></canvas></div>
+  <div class="card"><h2>Vehicles</h2><table id="tb"></table></div>
+</div><div>
+  <div class="card"><h2>OTA update (signed by cloud)</h2>
+    <label>Target speed (m/s)</label><input id="ts" type="number" step="0.5" placeholder="12">
+    <label>Detector tolerance (m)</label><input id="tol" type="number" step="0.5" placeholder="5">
+    <label>Version</label><input id="ver" placeholder="1.1">
+    <label>Vehicle</label><select id="oc"><option value="all">all</option></select><br>
+    <button onclick="ota()">Push OTA</button></div>
+  <div class="card"><h2>Attack simulator</h2>
+    <label>Victim car</label><select id="vc"></select>
+    <label>Mode</label><select id="am"><option>teleport</option><option>brake</option><option>badota</option></select>
+    <label><input id="sg" type="checkbox"> use stolen fleet key (bypass gateway)</label>
+    <button class="red" onclick="atk()">Launch 10 s attack</button></div>
+  <div class="card"><h2>Alerts (vehicle -> cloud)</h2><div id="alerts"></div></div>
+</div></div>
+<script>
+const COL={CRUISE:'#4aa3ff',FOLLOW:'#3fb950',DEGRADED:'#f0883e',WAIT:'#8b98a8'};
+const cv=document.getElementById('cv'),g=cv.getContext('2d');let P=null;
+const post=(u,b)=>fetch(u,{method:'POST',body:JSON.stringify(b)});
+function ota(){post('/api/ota',{target_speed:ts.value,detector_tol:tol.value,version:ver.value,car:oc.value})}
+function atk(){post('/api/attack',{victim:+vc.value,mode:am.value,signed:sg.checked,duration:10})}
+async function init(){
+  P=await (await fetch('/api/path')).json();
+  for(let i=0;i<P.n_cars;i++){oc.add(new Option('car '+i,i));if(i>0)vc.add(new Option('car '+i,i))}
+  hdr.textContent=P.secure?'· secure V2V ON':'· secure V2V OFF';
+  setInterval(poll,100);
+}
+async function poll(){try{draw(await (await fetch('/api/state')).json())}catch(e){}}
+function draw(S){
+  const xs=P.x,ys=P.y,minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+  const W=cv.width,H=cv.height,m=30,sc=Math.min((W-2*m)/(maxX-minX||1),(H-2*m)/(maxY-minY||1));
+  const tx=x=>m+(x-minX)*sc,ty=y=>H-m-(y-minY)*sc;
+  g.clearRect(0,0,W,H);g.strokeStyle='#2a3545';g.lineWidth=8;g.beginPath();
+  xs.forEach((x,i)=>i?g.lineTo(tx(x),ty(ys[i])):g.moveTo(tx(x),ty(ys[i])));g.closePath();g.stroke();
+  S.cars.forEach(c=>{const col=COL[c.mode]||'#888';g.fillStyle=col;g.beginPath();g.arc(tx(c.x),ty(c.y),9,0,7);g.fill();
+    g.fillStyle='#000';g.font='bold 10px sans-serif';g.textAlign='center';g.fillText(c.id,tx(c.x),ty(c.y)+3.5)});
+  tb.innerHTML='<tr><th>Car</th><th>Mode</th><th>v m/s</th><th>Gap m</th><th>Ver</th><th>Tol</th><th>Rej</th><th>Drop</th></tr>'+
+   S.cars.map(c=>`<tr><td>car${c.id}</td><td><span class="pill" style="background:${COL[c.mode]||'#888'}">${c.mode}</span></td>
+   <td>${c.v.toFixed(1)}</td><td>${c.gap==null?'-':c.gap.toFixed(1)}</td><td>${c.version}</td><td>${c.tol}</td><td>${c.rejected}</td><td>${c.drops}</td></tr>`).join('');
+  alerts.innerHTML=S.alerts.map(a=>`<div class="al"><b>car${a.car}</b> [${a.src}] ${a.reason} <span style="color:var(--mu)">t=${a.t.toFixed(1)}</span></div>`).join('')||'<span style="color:var(--mu)">none</span>';
+}
+init();
+</script></body></html>

@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Platoon Route Designer (Free - OpenStreetMap)</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  html, body { height: 100%; margin: 0; font-family: Arial, sans-serif; }
+  #topbar {
+    position: absolute; top: 10px; left: 10px; z-index: 1000;
+    background: white; padding: 10px 14px; border-radius: 8px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.3); display: flex; gap: 8px; align-items: center;
+    flex-wrap: wrap; max-width: 90%;
+  }
+  #search { width: 260px; padding: 6px; }
+  button {
+    padding: 6px 12px; border: none; border-radius: 5px; cursor: pointer;
+    background: #1a73e8; color: white; font-size: 13px;
+  }
+  button.secondary { background: #db4437; }
+  button.gray { background: #5f6368; }
+  #map { height: 100%; width: 100%; }
+  #status {
+    position: absolute; bottom: 10px; left: 10px; z-index: 1000;
+    background: white; padding: 6px 12px; border-radius: 6px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.3); font-size: 13px;
+  }
+  #suggestions {
+    position: absolute; top: 42px; left: 0; background: white; width: 260px;
+    max-height: 180px; overflow-y: auto; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+    z-index: 1001; display: none;
+  }
+  #suggestions div { padding: 6px 8px; cursor: pointer; font-size: 13px; border-bottom: 1px solid #eee; }
+  #suggestions div:hover { background: #f0f0f0; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <div style="position: relative;">
+    <input id="search" type="text" placeholder="Search a place (e.g. Mangalagiri, Amaravati)">
+    <div id="suggestions"></div>
+  </div>
+  <button id="drawBtn">Start Drawing Path</button>
+  <button id="undoBtn" class="gray">Undo Last Point</button>
+  <button id="clearBtn" class="secondary">Clear Path</button>
+  <button id="exportBtn">Export Path (JSON)</button>
+</div>
+
+<div id="map"></div>
+<div id="status">Points in path: <span id="pointCount">0</span></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+let map, polyline, markers = [];
+let pathPoints = [];   // array of {lat, lng}
+let drawingEnabled = false;
+
+function initMap() {
+  map = L.map('map').setView([16.4300, 80.5500], 13); // default: Mangalagiri area
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  polyline = L.polyline([], { color: '#E6007E', weight: 5 }).addTo(map);
+
+  map.on('click', (e) => {
+    if (!drawingEnabled) return;
+    addPoint(e.latlng.lat, e.latlng.lng);
+  });
+
+  document.getElementById("drawBtn").addEventListener("click", toggleDrawing);
+  document.getElementById("undoBtn").addEventListener("click", undoLastPoint);
+  document.getElementById("clearBtn").addEventListener("click", clearPath);
+  document.getElementById("exportBtn").addEventListener("click", exportPath);
+
+  setupSearch();
+}
+
+function addPoint(lat, lng) {
+  pathPoints.push({ lat, lng });
+
+  // draggable marker so you can fine-tune each point after placing it
+  const marker = L.circleMarker([lat, lng], {
+    radius: 5, color: '#E6007E', fillColor: '#E6007E', fillOpacity: 1
+  }).addTo(map);
+  const idx = markers.length;
+  marker.on('mousedown', () => {
+    map.dragging.disable();
+    map.once('mousemove', function onMove(e) { }); // placeholder, drag handled below
+  });
+  // Enable dragging on the marker itself via Leaflet's draggable circleMarker workaround
+  makeDraggable(marker, idx);
+  markers.push(marker);
+
+  polyline.setLatLngs(pathPoints.map(p => [p.lat, p.lng]));
+  updateCount();
+}
+
+function makeDraggable(marker, idx) {
+  marker.on('mousedown', function (e) {
+    map.dragging.disable();
+    function onDrag(ev) {
+      const newLatLng = ev.latlng;
+      marker.setLatLng(newLatLng);
+      pathPoints[idx] = { lat: newLatLng.lat, lng: newLatLng.lng };
+      polyline.setLatLngs(pathPoints.map(p => [p.lat, p.lng]));
+    }
+    function onUp() {
+      map.off('mousemove', onDrag);
+      map.off('mouseup', onUp);
+      map.dragging.enable();
+    }
+    map.on('mousemove', onDrag);
+    map.on('mouseup', onUp);
+  });
+}
+
+function toggleDrawing() {
+  drawingEnabled = !drawingEnabled;
+  const btn = document.getElementById("drawBtn");
+  btn.textContent = drawingEnabled ? "Stop Drawing (click map to add points)" : "Start Drawing Path";
+}
+
+function undoLastPoint() {
+  pathPoints.pop();
+  const m = markers.pop();
+  if (m) map.removeLayer(m);
+  polyline.setLatLngs(pathPoints.map(p => [p.lat, p.lng]));
+  updateCount();
+}
+
+function clearPath() {
+  pathPoints = [];
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+  polyline.setLatLngs([]);
+  updateCount();
+}
+
+function updateCount() {
+  document.getElementById("pointCount").textContent = pathPoints.length;
+}
+
+function exportPath() {
+  if (pathPoints.length < 2) {
+    alert("Add at least 2 points before exporting.");
+    return;
+  }
+  const data = JSON.stringify(pathPoints, null, 2);
+  const blob = new Blob([data], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "path_data.json";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ---- Free place search using Nominatim (OpenStreetMap's geocoder) ----
+function setupSearch() {
+  const input = document.getElementById("search");
+  const suggBox = document.getElementById("suggestions");
+  let debounceTimer;
+
+  input.addEventListener("input", () => {
+    clearTimeout(debounceTimer);
+    const q = input.value.trim();
+    if (q.length < 3) { suggBox.style.display = "none"; return; }
+    debounceTimer = setTimeout(() => searchPlace(q), 400);
+  });
+
+  async function searchPlace(query) {
+    try {
+      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`;
+      const res = await fetch(url, { headers: { "Accept-Language": "en" } });
+      const results = await res.json();
+      suggBox.innerHTML = "";
+      if (results.length === 0) { suggBox.style.display = "none"; return; }
+      results.forEach(r => {
+        const div = document.createElement("div");
+        div.textContent = r.display_name;
+        div.addEventListener("click", () => {
+          map.setView([parseFloat(r.lat), parseFloat(r.lon)], 15);
+          suggBox.style.display = "none";
+          input.value = r.display_name;
+        });
+        suggBox.appendChild(div);
+      });
+      suggBox.style.display = "block";
+    } catch (err) {
+      console.error("Search failed:", err);
+    }
+  }
+}
+
+initMap();
+</script>
+
+</body>
+</html>

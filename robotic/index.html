@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Platoon Simulation - Live with Messaging</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  html, body { margin: 0; font-family: Arial, sans-serif; }
+  #mapWrap { position: relative; height: 78vh; }
+  #map { height: 100%; width: 100%; }
+  #panel, #adminBox, #carPanel {
+    position: absolute; z-index: 1000; background: white; padding: 12px 14px;
+    border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+  }
+  #panel { top: 10px; left: 10px; width: 320px; max-height: 92%; overflow-y: auto; }
+  #adminBox { top: 10px; right: 10px; width: 270px; max-height: 92%; overflow-y: auto; }
+  #carPanel { bottom: 10px; right: 10px; width: 300px; max-height: 55%; overflow-y: auto; display: none; }
+  #panel h3, #adminBox h3, #carPanel h3 { margin: 0 0 8px 0; font-size: 15px; }
+  #panel h4 { margin: 10px 0 4px 0; font-size: 13px; }
+  #search { width: 100%; padding: 6px; box-sizing: border-box; }
+  #suggestions {
+    background: white; max-height: 150px; overflow-y: auto; border-radius: 6px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.3); display: none;
+  }
+  #suggestions div { padding: 6px 8px; cursor: pointer; font-size: 13px; border-bottom: 1px solid #eee; }
+  #suggestions div:hover { background: #f0f0f0; }
+  .row { display: flex; gap: 6px; margin: 4px 0; flex-wrap: wrap; }
+  .field { flex: 1; min-width: 80px; font-size: 12px; }
+  .field input { width: 100%; box-sizing: border-box; padding: 4px; }
+  button {
+    padding: 6px 10px; border: none; border-radius: 5px; cursor: pointer;
+    background: #1a73e8; color: white; font-size: 13px;
+  }
+  button.secondary { background: #db4437; }
+  button.gray { background: #5f6368; }
+  button.green { background: #0f9d58; }
+  button:disabled { background: #ccc; cursor: not-allowed; }
+  button.quickCmdBtn { background: #5f6368; font-size: 11px; padding: 5px 7px; }
+  button.quickCmdBtn.secondary { background: #db4437; }
+  #status { font-size: 12px; color: #333; margin-top: 6px; white-space: pre-line; }
+  #playControls { display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+  #legend { max-height: 180px; overflow-y: auto; font-size: 12px; margin-top: 6px; }
+  .legend-row { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+  .legend-row span:last-child:hover { text-decoration: underline; cursor: pointer; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; border: 1px solid #333; flex-shrink: 0; }
+  #chartsSection { padding: 20px; }
+  #chartsSection canvas { margin-bottom: 30px; max-height: 320px; }
+  #adminMessage, #carPanelText { width: 100%; box-sizing: border-box; padding: 6px; }
+  #adminBox select, #carPanel select { width: 100%; padding: 4px; margin-bottom: 4px; }
+  #networkStatus { font-size: 11px; color: #555; margin-top: 7px; word-break: break-word; }
+
+  /* ---- Per-car message history: REAL = green, FAKE = red ---- */
+  .msg-row {
+    border-radius: 6px;
+    padding: 6px 8px;
+    margin: 6px 0;
+    font-size: 12px;
+  }
+  .msg-row.msg-real { background: #d9f2d9; border-left: 4px solid #2e7d32; }
+  .msg-row.msg-fake { background: #f8d7da; border-left: 4px solid #c62828; }
+  .msg-head { display: flex; justify-content: space-between; align-items: center; }
+  .msg-tag { font-size: 10px; font-weight: bold; letter-spacing: 0.5px; }
+  .msg-real .msg-tag { color: #2e7d32; }
+  .msg-fake .msg-tag { color: #c62828; }
+  .msg-text { margin: 3px 0; }
+  .msg-time { font-size: 10px; color: #666; }
+  .msg-reason { font-size: 10px; color: #444; font-style: italic; margin-top: 2px; }
+</style>
+</head>
+<body>
+
+<div id="mapWrap">
+  <div id="panel">
+    <h3>Platoon Route &amp; Simulation</h3>
+
+    <input id="search" type="text" placeholder="Search a place">
+    <div id="suggestions"></div>
+
+    <div class="row">
+      <button id="drawBtn">Start Drawing</button>
+      <button id="undoBtn" class="gray">Undo</button>
+      <button id="clearBtn" class="secondary">Clear</button>
+    </div>
+    <div class="row" style="font-size:12px; align-items:center;">
+      <label><input type="checkbox" id="closeLoopChk"> Return to start point (loop)</label>
+    </div>
+    <div style="font-size:11px; color:#555; margin-bottom:4px;">
+      Click your start point, then middle points, then your end point, in order.
+    </div>
+
+    <h4>Simulation settings</h4>
+    <div class="row">
+      <div class="field">Cars<input id="nCars" type="number" value="10" min="2" max="20"></div>
+      <div class="field">Speed (m/s)<input id="speed" type="number" value="12" min="1"></div>
+      <div class="field">Car spacing (m)<input id="spacing" type="number" value="20" min="5"></div>
+    </div>
+    <div class="row">
+      <div class="field">Path resolution (m)<input id="pathRes" type="number" value="5" min="1"></div>
+    </div>
+
+    <div class="row">
+      <button id="runBtn" class="green" style="flex:1;">Generate Route &amp; Run Simulation (Live)</button>
+    </div>
+    <div id="status"></div>
+
+    <div id="playControls" style="display:none;">
+      <button id="playBtn">Pause</button>
+      <button id="refreshBtn" class="gray">Update Graphs</button>
+    </div>
+    <div id="timeLabel" style="font-size:12px; margin-top:4px;"></div>
+    <div id="legend"></div>
+
+    <div class="row" id="exportRow" style="display:none;">
+      <button id="exportBtn" style="flex:1;">Download Excel (incl. messages)</button>
+    </div>
+  </div>
+
+  <div id="map"></div>
+
+  <!-- Admin / car-to-car message composer -->
+  <div id="adminBox">
+    <h3>Send a Message</h3>
+    <div style="font-size:10px; color:#777; margin:-4px 0 8px;">V2V-LSTM Intrusion Detection Model · on-device inference</div>
+    <div style="font-size:11px; color:#555;">From</div>
+    <select id="msgFrom"></select>
+    <div style="font-size:11px; color:#555;">To</div>
+    <select id="msgTo"></select>
+
+    <div style="font-size:11px; color:#555; margin-top:4px;">Quick commands</div>
+    <div class="row">
+      <button class="quickCmdBtn" data-text="increase speed">Increase Speed</button>
+      <button class="quickCmdBtn" data-text="decrease speed">Decrease Speed</button>
+      <button class="quickCmdBtn" data-text="double the speed">Double Speed</button>
+      <button class="quickCmdBtn" data-text="half the speed">Half Speed</button>
+      <button class="quickCmdBtn" data-text="stop">Stop</button>
+      <button class="quickCmdBtn" data-text="resume">Resume</button>
+      <button class="quickCmdBtn" data-text="change direction">Change Direction</button>
+    </div>
+
+    <textarea id="adminMessage" placeholder="Type a message, e.g. 'increase speed'"></textarea>
+    <div style="font-size:10px; color:#777; margin: 2px 0 4px;">
+      Every message is passed through the intrusion-detection model automatically — checked for suspicious wording, contradictions, and unrealistic values before it's allowed to reach a vehicle.
+    </div>
+    <div class="row">
+      <button id="sendAdminBtn" class="green" style="flex:1;">Send</button>
+    </div>
+    <div id="networkStatus">Model idle. Run the simulation to activate the V2V network.</div>
+  </div>
+
+  <!-- Per-car message log panel (click any car marker or legend row to open) -->
+  <div id="carPanel">
+    <div class="row" style="justify-content:space-between; align-items:center;">
+      <h3 id="carPanelTitle" style="margin:0;">Messages</h3>
+      <button id="closeCarPanel" class="gray">Close</button>
+    </div>
+    <div id="carPanelMessages"></div>
+    <div id="carPanelQuick"></div>
+  </div>
+</div>
+
+<div id="chartsSection" style="display:none;">
+  <h2>Comparison Graphs - All Cars</h2>
+  <canvas id="speedChart"></canvas>
+  <canvas id="accelChart"></canvas>
+  <canvas id="distChart"></canvas>
+  <canvas id="gapChart"></canvas>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="platoon_sim.js"></script>
+<script src="messaging.js"></script>
+<script src="sdv_bridge.js"></script>
+<script>
+const COLORS = ["#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd",
+                 "#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf",
+                 "#aec7e8","#ffbb78","#98df8a","#ff9896","#c5b0d5"];
+
+// ---------------- Map + drawing ----------------
+let map, drawPolyline;
+let pathPoints = [], drawMarkers = [];
+let drawingEnabled = false;
+
+// ---------------- Live simulation state ----------------
+let currentPlatoon = null, proj = null, roadLine = null;
+let carMarkers = {}, networkLinks = [], popupTimers = {};
+let history = [], simTime = 0, nextLogTime = 0;
+let liveTimer = null, liveRunning = false, tripDone = false, pipelineClosed = false;
+let routeInfoGlobal = null;
+let chartObjs = [];
+
+function getCarIds() { return Object.keys(carMarkers).map(Number); }
+function getCurrentPlatoon() { return currentPlatoon; }
+
+function initMap() {
+  map = L.map('map').setView([16.4300, 80.5500], 13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  drawPolyline = L.polyline([], { color: '#E6007E', weight: 4 }).addTo(map);
+
+  map.on('click', (e) => {
+    if (!drawingEnabled) return;
+    pathPoints.push({ lat: e.latlng.lat, lng: e.latlng.lng });
+    const m = L.circleMarker([e.latlng.lat, e.latlng.lng], { radius: 5, color: '#E6007E', fillColor: '#E6007E', fillOpacity: 1 }).addTo(map);
+    drawMarkers.push(m);
+    drawPolyline.setLatLngs(pathPoints.map(p => [p.lat, p.lng]));
+  });
+
+  document.getElementById('drawBtn').addEventListener('click', () => {
+    drawingEnabled = !drawingEnabled;
+    document.getElementById('drawBtn').textContent = drawingEnabled ? 'Stop Drawing' : 'Start Drawing';
+  });
+  document.getElementById('undoBtn').addEventListener('click', () => {
+    pathPoints.pop();
+    const m = drawMarkers.pop();
+    if (m) map.removeLayer(m);
+    drawPolyline.setLatLngs(pathPoints.map(p => [p.lat, p.lng]));
+  });
+  document.getElementById('clearBtn').addEventListener('click', resetAll);
+  document.getElementById('runBtn').addEventListener('click', runPipeline);
+  document.getElementById('playBtn').addEventListener('click', togglePlay);
+  document.getElementById('refreshBtn').addEventListener('click', manualRefresh);
+  document.getElementById('exportBtn').addEventListener('click', exportExcel);
+
+  setupSearch();
+  initMessaging(getCurrentPlatoon, getCarIds);
+}
+
+function resetDrawing() {
+  pathPoints = [];
+  drawMarkers.forEach(m => map.removeLayer(m));
+  drawMarkers = [];
+  drawPolyline.setLatLngs([]);
+}
+
+function resetSimulation() {
+  clearInterval(liveTimer);
+  liveRunning = false;
+  currentPlatoon = null;
+  history = []; simTime = 0; nextLogTime = 0; tripDone = false;
+  Object.values(carMarkers).forEach(m => map.removeLayer(m));
+  carMarkers = {};
+  networkLinks.forEach(link => map.removeLayer(link));
+  networkLinks = [];
+  if (roadLine) { map.removeLayer(roadLine); roadLine = null; }
+  document.getElementById('playControls').style.display = 'none';
+  document.getElementById('legend').innerHTML = '';
+  document.getElementById('timeLabel').textContent = '';
+  document.getElementById('exportRow').style.display = 'none';
+  document.getElementById('chartsSection').style.display = 'none';
+  setStatus('');
+  resetMessaging();
+}
+
+function resetAll() { resetDrawing(); resetSimulation(); }
+
+function setupSearch() {
+  const input = document.getElementById('search');
+  const suggBox = document.getElementById('suggestions');
+  let debounceTimer;
+  input.addEventListener('input', () => {
+    clearTimeout(debounceTimer);
+    const q = input.value.trim();
+    if (q.length < 3) { suggBox.style.display = 'none'; return; }
+    debounceTimer = setTimeout(() => searchPlace(q), 400);
+  });
+  async function searchPlace(query) {
+    try {
+      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`;
+      const res = await fetch(url, { headers: { 'Accept-Language': 'en' } });
+      const results = await res.json();
+      suggBox.innerHTML = '';
+      if (results.length === 0) { suggBox.style.display = 'none'; return; }
+      results.forEach(r => {
+        const div = document.createElement('div');
+        div.textContent = r.display_name;
+        div.addEventListener('click', () => {
+          map.setView([parseFloat(r.lat), parseFloat(r.lon)], 15);
+          suggBox.style.display = 'none';
+          input.value = r.display_name;
+        });
+        suggBox.appendChild(div);
+      });
+      suggBox.style.display = 'block';
+    } catch (err) { console.error('Search failed:', err); }
+  }
+}
+
+function setStatus(msg) { document.getElementById('status').textContent = msg; }
+
+// ---------------- Main pipeline: builds the route and starts the LIVE simulation ----------------
+async function runPipeline() {
+  if (pathPoints.length < 2) { alert('Draw at least 2 points on the map first (start, middle points, end).'); return; }
+  document.getElementById('runBtn').disabled = true;
+  resetSimulation();
+
+  try {
+    const closed = document.getElementById('closeLoopChk').checked;
+
+    setStatus('Snapping path to real roads...');
+    const routeInfo = await snapToRoads(pathPoints, closed);
+    routeInfoGlobal = routeInfo;
+    const snapped = routeInfo.coords;
+
+    setStatus('Building local coordinate system...');
+    const lat0 = snapped[0].lat, lon0 = snapped[0].lng;
+    proj = makeProjector(lat0, lon0);
+    const rawXY = snapped.map(p => proj.toXY(p.lat, p.lng));
+
+    let spacing = parseFloat(document.getElementById('pathRes').value) || 5.0;
+    let cumTotal = 0;
+    for (let i = 1; i < rawXY.length; i++) cumTotal += Math.hypot(rawXY[i].x - rawXY[i-1].x, rawXY[i].y - rawXY[i-1].y);
+    if (cumTotal / spacing > 50000) spacing = cumTotal / 50000;
+
+    setStatus(`Resampling path (spacing ${spacing.toFixed(1)} m)...`);
+    const { points } = resamplePath(rawXY, spacing);
+    const path = closed ? new ClosedPath(points) : new OpenPath(points);
+
+    const nCars = parseInt(document.getElementById('nCars').value) || 10;
+    const speed = parseFloat(document.getElementById('speed').value) || 12;
+    const carSpacing = parseFloat(document.getElementById('spacing').value) || 20;
+
+    currentPlatoon = new Platoon(path, nCars, carSpacing, speed, closed);
+    pipelineClosed = closed;
+
+    roadLine = L.polyline(snapped.map(p => [p.lat, p.lng]), { color: '#E6007E', weight: 4, opacity: 0.8 }).addTo(map);
+    map.fitBounds(roadLine.getBounds());
+
+    const legend = document.getElementById('legend');
+    legend.innerHTML = '';
+    currentPlatoon.vehicles.forEach(v => {
+      const ll = proj.toLatLon(v.x, v.y);
+      const color = COLORS[v.id % COLORS.length];
+      const marker = L.circleMarker([ll.lat, ll.lon], { radius: 7, color: '#000', weight: 1, fillColor: color, fillOpacity: 1 }).addTo(map);
+      marker.bindTooltip(v.isLeader ? 'Leader' : `Car ${v.id}`);
+      marker.on('click', () => openCarMessagePanel(v.id));
+      carMarkers[v.id] = marker;
+
+      const row = document.createElement('div');
+      row.className = 'legend-row';
+      row.innerHTML = `<span class="dot" style="background:${color}"></span><span id="lg-${v.id}">${v.isLeader?'Leader':'Car '+v.id}: 0.0 m/s</span>`;
+      row.querySelector('span:last-child').addEventListener('click', () => openCarMessagePanel(v.id));
+      legend.appendChild(row);
+    });
+
+    buildFullMeshNetwork();
+    resetMessaging();
+
+    document.getElementById('playControls').style.display = 'flex';
+    document.getElementById('exportRow').style.display = 'flex';
+
+    history = []; simTime = 0; nextLogTime = 0; tripDone = false;
+    logSnapshot();
+    renderLiveMarkers();
+
+    liveRunning = true;
+    document.getElementById('playBtn').textContent = 'Pause';
+    clearInterval(liveTimer);
+    liveTimer = setInterval(liveTick, 150);
+
+    setStatus(`Real road route distance (OSRM): ${(routeInfo.distance_m/1000).toFixed(2)} km. Simulation running live - send messages any time below.`);
+
+  } catch (err) {
+    console.error(err);
+    setStatus('Error: ' + err.message + ' (check your internet connection - OSRM/Nominatim need it)');
+  } finally {
+    document.getElementById('runBtn').disabled = false;
+  }
+}
+
+function logSnapshot() {
+  const cars = currentPlatoon.vehicles.map(v => {
+    let gap = null;
+    if (!v.isLeader) {
+      gap = currentPlatoon.closed
+        ? (((v.prev.s - v.s) % currentPlatoon.path.length) + currentPlatoon.path.length) % currentPlatoon.path.length
+        : (v.prev.s - v.s);
+    }
+    return { id: v.id, role: v.isLeader ? 'Leader' : 'Follower', x: v.x, y: v.y, heading: v.heading,
+             distance: v.distanceTraveled, speed: v.v, accel: v.a, gap };
+  });
+  history.push({ time: Math.round(simTime * 100) / 100, cars });
+}
+
+function renderLiveMarkers() {
+  currentPlatoon.vehicles.forEach(v => {
+    const ll = proj.toLatLon(v.x, v.y);
+    const marker = carMarkers[v.id];
+    if (marker) marker.setLatLng([ll.lat, ll.lon]);
+    const lg = document.getElementById(`lg-${v.id}`);
+    if (lg) lg.textContent = `${v.isLeader ? 'Leader' : 'Car ' + v.id}: ${v.v.toFixed(1)} m/s`;
+  });
+  document.getElementById('timeLabel').textContent = `t = ${simTime.toFixed(0)} s`;
+  updateNetworkLinks();
+}
+
+function liveTick() {
+  if (!liveRunning || !currentPlatoon) return;
+  const dt = 0.1;
+  const stepsPerTick = 3; // fixed real-time-ish pace; messages apply between ticks instantly
+  for (let k = 0; k < stepsPerTick; k++) {
+    currentPlatoon.step(dt);
+    simTime += dt;
+    if (simTime + 1e-9 >= nextLogTime) {
+      logSnapshot();
+      nextLogTime += 1.0;
+    }
+  }
+  renderLiveMarkers();
+
+  if (!pipelineClosed && currentPlatoon.allSettled() && !tripDone) {
+    tripDone = true;
+    setStatus(buildSummary(routeInfoGlobal));
+    drawCharts();
+    document.getElementById('chartsSection').style.display = 'block';
+    setTimeout(() => {
+      liveRunning = false;
+      clearInterval(liveTimer);
+      document.getElementById('playBtn').textContent = 'Play';
+    }, 1500);
+  }
+}
+
+function togglePlay() {
+  liveRunning = !liveRunning;
+  document.getElementById('playBtn').textContent = liveRunning ? 'Pause' : 'Play';
+}
+
+function manualRefresh() {
+  if (!currentPlatoon || history.length === 0) return;
+  setStatus(buildSummary(routeInfoGlobal));
+  drawCharts();
+  document.getElementById('chartsSection').style.display = 'block';
+}
+
+function buildSummary(routeInfo) {
+  const last = history[history.length - 1];
+  const lines = [];
+  lines.push(`Real road route distance (OSRM): ${(routeInfo.distance_m/1000).toFixed(2)} km`);
+  lines.push(`OSRM estimated drive time (single car): ${(routeInfo.duration_s/60).toFixed(1)} min`);
+  lines.push(`Simulation ${pipelineClosed ? 'ran for' : 'completed at'} t = ${last.time.toFixed(0)} s`);
+  lines.push('');
+  last.cars.forEach(c => {
+    const label = c.role === 'Leader' ? 'Leader' : `Car ${c.id}`;
+    lines.push(`${label}: traveled ${(c.distance/1000).toFixed(3)} km, final speed ${c.speed.toFixed(1)} m/s`);
+  });
+  return lines.join('\n');
+}
+
+// ---------------- Full-mesh V2V network visualization ----------------
+function buildFullMeshNetwork() {
+  networkLinks.forEach(link => map.removeLayer(link));
+  networkLinks = [];
+  const ids = Object.keys(carMarkers).map(Number);
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      const a = carMarkers[ids[i]].getLatLng();
+      const b = carMarkers[ids[j]].getLatLng();
+      const link = L.polyline([a, b], { color: '#5f6368', weight: 1.2, opacity: 0.35, dashArray: '4,4', interactive: false }).addTo(map);
+      link._vehiclePair = [ids[i], ids[j]];
+      networkLinks.push(link);
+    }
+  }
+}
+
+function updateNetworkLinks() {
+  networkLinks.forEach(link => {
+    const [aId, bId] = link._vehiclePair;
+    const a = carMarkers[aId], b = carMarkers[bId];
+    if (a && b) link.setLatLngs([a.getLatLng(), b.getLatLng()]);
+  });
+}
+
+// hook messaging.js uses to flash a popup on the map when a car gets a message
+window.showVehiclePopup = function(carId, entry) {
+  const marker = carMarkers[carId];
+  if (!marker) return;
+  if (popupTimers[carId]) clearTimeout(popupTimers[carId]);
+  const color = entry.isReal ? '#2e7d32' : '#c62828';
+  const bg = entry.isReal ? '#d9f2d9' : '#f8d7da';
+  const label = carId === 0 ? 'Leader' : `Car ${carId}`;
+  const verdictLine = entry.isReal
+    ? `REAL (${entry.confidence}% confidence) — accepted`
+    : `FAKE (${entry.confidence}% confidence) — ` + ((entry.reasons || []).join('; ') || 'blocked');
+  const html = `<div style="font-size:12px; min-width:180px; max-width:220px; background:${bg}; border-left:4px solid ${color}; padding:4px 6px; border-radius:4px;">
+    <b>${label}</b><br>${escapeHtml(entry.text)}<br><i>${escapeHtml(verdictLine)}</i>
+  </div>`;
+  marker.bindPopup(html, { autoClose: false, closeOnClick: false, closeButton: false, offset: [0, -8] }).openPopup();
+  popupTimers[carId] = setTimeout(() => { if (marker) marker.closePopup(); }, 4000);
+};
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// ---------------- Excel export (simulation log + messages) ----------------
+function exportExcel() {
+  if (history.length === 0) { alert('Run the simulation first.'); return; }
+  const flatRows = [];
+  history.forEach(f => f.cars.forEach(c => {
+    flatRows.push({
+      time_s: f.time, car_id: c.id, role: c.role,
+      x_m: +c.x.toFixed(3), y_m: +c.y.toFixed(3),
+      distance_traveled_m: +c.distance.toFixed(3),
+      speed_mps: +c.speed.toFixed(4),
+      acceleration_mps2: +c.accel.toFixed(4),
+      gap_to_predecessor_m: c.gap === null ? '' : +c.gap.toFixed(3)
+    });
+  }));
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(flatRows), 'Simulation_Log');
+
+  function pivot(field) {
+    return history.map(f => {
+      const row = { time_s: f.time };
+      f.cars.forEach(c => row['Car_' + c.id] = field === 'gap' ? (c.gap === null ? '' : c.gap) : c[field]);
+      return row;
+    });
+  }
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pivot('speed')), 'Speed_by_Car');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pivot('accel')), 'Acceleration_by_Car');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pivot('distance')), 'Distance_by_Car');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pivot('gap')), 'Gap_by_Car');
+
+  const msgRows = buildMessageRows();
+  if (msgRows.length > 0) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(msgRows), 'Messages');
+
+  XLSX.writeFile(wb, 'platoon_simulation.xlsx');
+}
+
+// ---------------- Charts ----------------
+function drawCharts() {
+  chartObjs.forEach(c => c.destroy());
+  chartObjs = [];
+  if (history.length === 0) return;
+  const carIds = history[0].cars.map(c => c.id);
+  const labels = history.map(f => f.time);
+
+  function buildDatasets(field) {
+    return carIds.map(id => ({
+      label: id === 0 ? 'Car 0 (Leader)' : `Car ${id}`,
+      data: history.map(f => { const c = f.cars.find(x => x.id === id); return field === 'gap' ? c.gap : c[field]; }),
+      borderColor: COLORS[id % COLORS.length],
+      backgroundColor: COLORS[id % COLORS.length],
+      fill: false, pointRadius: 0, borderWidth: 1.5
+    }));
+  }
+
+  function makeChart(canvasId, field, title, yLabel) {
+    const ctx = document.getElementById(canvasId).getContext('2d');
+    chartObjs.push(new Chart(ctx, {
+      type: 'line',
+      data: { labels, datasets: buildDatasets(field) },
+      options: {
+        responsive: true,
+        plugins: { title: { display: true, text: title } },
+        scales: { x: { title: { display: true, text: 'Time (s)' } }, y: { title: { display: true, text: yLabel } } }
+      }
+    }));
+  }
+
+  makeChart('speedChart', 'speed', 'Speed Comparison - All Cars', 'Speed (m/s)');
+  makeChart('accelChart', 'accel', 'Acceleration Comparison - All Cars', 'Acceleration (m/s^2)');
+  makeChart('distChart', 'distance', 'Distance Traveled Comparison - All Cars', 'Cumulative Distance (m)');
+  makeChart('gapChart', 'gap', 'Inter-Vehicle Spacing Over Time', 'Gap to predecessor (m)');
+}
+
+initMap();
+</script>
+
+</body>
+</html>
